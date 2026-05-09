@@ -13,7 +13,7 @@ export type TransferView = {
   name: string;
   size: number;
   done: number;
-  status: "idle" | "waiting" | "transferring" | "paused" | "done" | "rejected" | "failed";
+  status: "idle" | "waiting" | "transferring" | "paused" | "stopped" | "done" | "rejected" | "failed";
   direction: "outgoing" | "incoming";
   startedAt?: number;
   completedAt?: number;

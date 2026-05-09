@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Edit3, LogOut, Pause, Play, QrCode, Send, ShieldCheck, Smartphone, X } from "lucide-react";
+import { Check, Copy, Download, Edit3, LogOut, Pause, Play, QrCode, Send, ShieldCheck, Smartphone, Square, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getDeviceId, getDeviceName, setDeviceName } from "../lib/device";
@@ -18,6 +18,7 @@ type ControlMessage =
   | { type: "file-reject"; id: string }
   | { type: "file-paused"; id: string }
   | { type: "file-resumed"; id: string }
+  | { type: "file-stopped"; id: string }
   | { type: "file-complete"; id: string };
 
 const chunkSize = 64 * 1024;
@@ -255,6 +256,16 @@ export function RoomPage({ roomId }: Props) {
       return;
     }
 
+    if (message.type === "file-stopped") {
+      const meta = incomingMetaRef.current;
+      if (meta?.id === message.id) {
+        incomingMetaRef.current = null;
+        incomingChunksRef.current = [];
+        patchIncoming({ status: "stopped" });
+      }
+      return;
+    }
+
     if (message.type === "file-complete") {
       const meta = incomingMetaRef.current;
       if (!meta || meta.id !== message.id) return;
@@ -273,16 +284,20 @@ export function RoomPage({ roomId }: Props) {
     try {
       while (offset < file.size) {
         await waitWhilePaused();
+        if (isOutgoingStopped(fileId)) break;
         await waitForBuffer(channel);
         await waitWhilePaused();
+        if (isOutgoingStopped(fileId)) break;
         const nextOffset = Math.min(offset + chunkSize, file.size);
         const buffer = await file.slice(offset, nextOffset).arrayBuffer();
         channel.send(buffer);
         offset = nextOffset;
         patchOutgoing({ done: offset });
       }
-      sendControl(channel, { type: "file-complete", id: fileId });
-      patchOutgoing({ status: "done", done: file.size, completedAt: performance.now() });
+      if (!isOutgoingStopped(fileId)) {
+        sendControl(channel, { type: "file-complete", id: fileId });
+        patchOutgoing({ status: "done", done: file.size, completedAt: performance.now() });
+      }
     } catch (error) {
       console.error(error);
       patchOutgoing({ status: "failed" });
@@ -313,6 +328,21 @@ export function RoomPage({ roomId }: Props) {
     if (channel && outgoing) {
       sendControl(channel, { type: "file-resumed", id: outgoing.id });
     }
+  }
+
+  function stopOutgoing() {
+    if (outgoing?.status !== "paused") {
+      return;
+    }
+
+    patchOutgoing({ status: "stopped" });
+    const peerId = outgoingPeerIdRef.current;
+    const channel = peerId ? channelsRef.current.get(peerId) : undefined;
+    if (channel && outgoing) {
+      sendControl(channel, { type: "file-stopped", id: outgoing.id });
+    }
+    outgoingFileRef.current = null;
+    outgoingPeerIdRef.current = null;
   }
 
   return (
@@ -410,7 +440,7 @@ export function RoomPage({ roomId }: Props) {
           </div>
 
           <div className="progress-grid">
-            <TransferCard title="发送进度" transfer={outgoing} onPause={pauseOutgoing} onResume={resumeOutgoing} />
+            <TransferCard title="发送进度" transfer={outgoing} onPause={pauseOutgoing} onResume={resumeOutgoing} onStop={stopOutgoing} />
             <TransferCard title="接收进度" transfer={incoming} />
           </div>
         </section>
@@ -451,12 +481,14 @@ function TransferCard({
   title,
   transfer,
   onPause,
-  onResume
+  onResume,
+  onStop
 }: {
   title: string;
   transfer?: ReturnType<typeof useTransferStore.getState>["incoming"];
   onPause?: () => void;
   onResume?: () => void;
+  onStop?: () => void;
 }) {
   const done = transfer?.done ?? 0;
   const size = transfer?.size ?? 0;
@@ -483,10 +515,18 @@ function TransferCard({
         </button>
       ) : null}
       {transfer?.status === "paused" && onResume ? (
-        <button className="transfer-action" onClick={onResume}>
-          <Play size={18} aria-hidden />
-          继续
-        </button>
+        <div className="transfer-actions">
+          <button className="transfer-action" onClick={onResume}>
+            <Play size={18} aria-hidden />
+            继续
+          </button>
+          {onStop ? (
+            <button className="transfer-action danger-action" onClick={onStop}>
+              <Square size={16} aria-hidden />
+              停止
+            </button>
+          ) : null}
+        </div>
       ) : null}
       {transfer?.url ? (
         <a className="download-link" href={transfer.url} download={transfer.name}>
@@ -536,6 +576,11 @@ function waitWhilePaused() {
   });
 }
 
+function isOutgoingStopped(fileId: string) {
+  const outgoing = useTransferStore.getState().outgoing;
+  return outgoing?.id === fileId && outgoing.status === "stopped";
+}
+
 function getStatusText(signalStatus: string, connectedCount: number, deviceCount: number) {
   if (signalStatus === "closed") return "信令已断开";
   if (signalStatus === "connecting") return "正在连接信令";
@@ -555,6 +600,7 @@ function translatePeerStatus(status?: PeerStatus) {
 function translateTransferStatus(status?: string) {
   if (status === "waiting") return "等待确认";
   if (status === "paused") return "已暂停";
+  if (status === "stopped") return "已停止";
   if (status === "done") return "完成";
   if (status === "rejected") return "已拒绝";
   if (status === "failed") return "失败";
