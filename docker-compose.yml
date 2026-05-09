@@ -1,0 +1,10 @@
+services:
+  lindrop:
+    build: .
+    container_name: lindrop
+    restart: unless-stopped
+    environment:
+      PORT: ${PORT:-8080}
+      ROOM_TTL_MS: ${ROOM_TTL_MS:-7200000}
+    ports:
+      - "${PORT:-8080}:${PORT:-8080}"

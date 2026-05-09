@@ -1,0 +1,22 @@
+{
+  "name": "lindrop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lindrop is a LAN-first browser file transfer app powered by WebRTC DataChannel.",
+  "workspaces": [
+    "apps/frontend",
+    "apps/backend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c cyan,magenta \"npm run dev -w @lindrop/backend\" \"npm run dev -w @lindrop/frontend\"",
+    "build": "npm run build -ws",
+    "start": "npm run start -w @lindrop/backend",
+    "typecheck": "npm run typecheck -ws"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
