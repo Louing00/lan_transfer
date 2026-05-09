@@ -51,6 +51,30 @@ APP_DIR=/opt/lindrop PORT=8080 BRANCH=main bash scripts/deploy.sh
 
 公网域名建议使用 Nginx 或 Caddy 反向代理到 `127.0.0.1:8080`，并启用 HTTPS。现代浏览器在公网环境下使用 WebRTC、剪贴板等能力时通常要求安全上下文。
 
+## 服务器中继模式
+
+默认模式仍然是 WebRTC 点对点传输，文件不上传服务器。如果两台设备不在同一网络，且 P2P/TURN 不可用，可以显式开启服务器中继模式：
+
+```bash
+RELAY_ADMIN_PASSWORD='换成强密码' \
+  bash scripts/deploy.sh
+```
+
+远程一键部署并开启：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Louing00/lan_transfer/main/scripts/deploy.sh | \
+  RELAY_ADMIN_PASSWORD='换成强密码' bash
+```
+
+开启后，房间页会出现“服务器中继”区域。输入管理员密码后，可以把文件临时上传到服务器，同房间内另一台设备可下载。中继文件默认 2 小时过期，默认最大 1GB。
+
+可选参数：
+
+```bash
+RELAY_FILE_TTL_MS=7200000 RELAY_MAX_FILE_BYTES=1073741824 bash scripts/deploy.sh
+```
+
 ## 一键部署 Nginx
 
 先部署应用，再部署 Nginx 反向代理：

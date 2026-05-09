@@ -1,5 +1,6 @@
-import { Check, Copy, Download, Edit3, LogOut, Pause, Play, QrCode, Send, ShieldCheck, Smartphone, Square, X } from "lucide-react";
+import { Check, Copy, Download, Edit3, LogOut, Pause, Play, QrCode, RefreshCw, Send, Server, ShieldCheck, Smartphone, Square, Upload, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import type { FormEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getDeviceId, getDeviceName, setDeviceName } from "../lib/device";
 import { formatBytes, formatPercent, formatSpeed } from "../lib/format";
@@ -23,6 +24,18 @@ type ControlMessage =
 
 const chunkSize = 64 * 1024;
 const maxBufferedAmount = 4 * 1024 * 1024;
+const relayTokenKey = "lindrop.relayToken";
+
+type RelayFile = {
+  id: string;
+  roomId: string;
+  name: string;
+  mimeType: string;
+  size: number;
+  createdAt: number;
+  expiresAt: number;
+  downloadUrl: string;
+};
 
 export function RoomPage({ roomId }: Props) {
   const [deviceName, setName] = useState(() => getDeviceName());
@@ -33,6 +46,12 @@ export function RoomPage({ roomId }: Props) {
   const [peerStatuses, setPeerStatuses] = useState<Record<string, PeerStatus>>({});
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [toast, setToast] = useState("");
+  const [relayEnabled, setRelayEnabled] = useState(false);
+  const [relayToken, setRelayToken] = useState(() => sessionStorage.getItem(relayTokenKey) ?? "");
+  const [relayPassword, setRelayPassword] = useState("");
+  const [relayFiles, setRelayFiles] = useState<RelayFile[]>([]);
+  const [relayUploading, setRelayUploading] = useState(false);
+  const [relayProgress, setRelayProgress] = useState(0);
 
   const deviceId = useMemo(() => getDeviceId(), []);
   const roomUrl = useMemo(() => `${window.location.origin}/room/${roomId}`, [roomId]);
@@ -57,6 +76,19 @@ export function RoomPage({ roomId }: Props) {
   } = useTransferStore();
 
   useWakeLock(Boolean(outgoing?.status === "transferring" || incoming?.status === "transferring"));
+
+  useEffect(() => {
+    void fetch("/api/relay/status")
+      .then((response) => response.json())
+      .then((status: { enabled: boolean }) => setRelayEnabled(status.enabled))
+      .catch(() => setRelayEnabled(false));
+  }, []);
+
+  useEffect(() => {
+    void refreshRelayFiles();
+    const timer = window.setInterval(() => void refreshRelayFiles(), 10000);
+    return () => window.clearInterval(timer);
+  }, [roomId]);
 
   useEffect(() => {
     reset();
@@ -139,6 +171,64 @@ export function RoomPage({ roomId }: Props) {
     setName(saved);
     setNameDraft(saved);
     setIsEditingName(false);
+  }
+
+  async function unlockRelay(event: FormEvent) {
+    event.preventDefault();
+    if (!relayPassword.trim()) {
+      setToast("请输入管理员密码");
+      return;
+    }
+
+    const response = await fetch("/api/relay/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password: relayPassword })
+    });
+
+    if (!response.ok) {
+      setToast(response.status === 503 ? "服务器未开启中继模式" : "管理员密码不正确");
+      return;
+    }
+
+    const session = (await response.json()) as { token: string };
+    sessionStorage.setItem(relayTokenKey, session.token);
+    setRelayToken(session.token);
+    setRelayPassword("");
+    setToast("服务器中继已解锁");
+  }
+
+  async function refreshRelayFiles() {
+    const response = await fetch(`/api/relay/rooms/${roomId}/files`);
+    if (!response.ok) {
+      return;
+    }
+    const payload = (await response.json()) as { files: RelayFile[] };
+    setRelayFiles(payload.files);
+  }
+
+  async function uploadViaRelay() {
+    if (!selectedFile) {
+      setToast("请先选择文件");
+      return;
+    }
+    if (!relayToken) {
+      setToast("请先输入管理员密码解锁中继");
+      return;
+    }
+
+    setRelayUploading(true);
+    setRelayProgress(0);
+    try {
+      await uploadRelayFile(roomId, selectedFile, relayToken, (progress) => setRelayProgress(progress));
+      setToast("已上传到服务器中继");
+      await refreshRelayFiles();
+    } catch (error) {
+      console.error(error);
+      setToast(error instanceof Error ? error.message : "中继上传失败");
+    } finally {
+      setRelayUploading(false);
+    }
   }
 
   async function sendSelectedFile() {
@@ -443,6 +533,61 @@ export function RoomPage({ roomId }: Props) {
             <TransferCard title="发送进度" transfer={outgoing} onPause={pauseOutgoing} onResume={resumeOutgoing} onStop={stopOutgoing} />
             <TransferCard title="接收进度" transfer={incoming} />
           </div>
+
+          <section className="relay-panel" aria-labelledby="relay-title">
+            <div className="relay-header">
+              <div>
+                <span className="eyebrow">跨网络兜底</span>
+                <h3 id="relay-title">服务器中继</h3>
+              </div>
+              <button className="icon-button" onClick={refreshRelayFiles} aria-label="刷新中继文件" title="刷新中继文件">
+                <RefreshCw size={18} aria-hidden />
+              </button>
+            </div>
+
+            {!relayEnabled ? (
+              <p className="relay-note">服务器未配置管理员密码，中继上传未开启。</p>
+            ) : relayToken ? (
+              <div className="relay-uploader">
+                <button className="relay-upload-button" onClick={uploadViaRelay} disabled={!selectedFile || relayUploading}>
+                  <Upload size={18} aria-hidden />
+                  {relayUploading ? `上传中 ${relayProgress}%` : "上传到服务器中继"}
+                </button>
+                <span>仅在不方便 P2P 直连时使用，文件会临时保存在服务器。</span>
+              </div>
+            ) : (
+              <form className="relay-login" onSubmit={unlockRelay}>
+                <Server size={18} aria-hidden />
+                <input
+                  type="password"
+                  value={relayPassword}
+                  onChange={(event) => setRelayPassword(event.target.value)}
+                  placeholder="管理员密码"
+                  aria-label="管理员密码"
+                />
+                <button type="submit">解锁</button>
+              </form>
+            )}
+
+            <div className="relay-list">
+              {relayFiles.length === 0 ? (
+                <span className="relay-empty">暂无服务器中继文件</span>
+              ) : (
+                relayFiles.map((file) => (
+                  <article className="relay-file" key={file.id}>
+                    <div>
+                      <strong>{file.name}</strong>
+                      <span>{formatBytes(file.size)} · {formatExpiry(file.expiresAt)}</span>
+                    </div>
+                    <a href={file.downloadUrl} download={file.name}>
+                      <Download size={18} aria-hidden />
+                      下载
+                    </a>
+                  </article>
+                ))
+              )}
+            </div>
+          </section>
         </section>
       </section>
 
@@ -579,6 +724,47 @@ function waitWhilePaused() {
 function isOutgoingStopped(fileId: string) {
   const outgoing = useTransferStore.getState().outgoing;
   return outgoing?.id === fileId && outgoing.status === "stopped";
+}
+
+function uploadRelayFile(roomId: string, file: File, token: string, onProgress: (progress: number) => void) {
+  return new Promise<void>((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", `/api/relay/files?roomId=${encodeURIComponent(roomId)}`);
+    request.setRequestHeader("Authorization", `Bearer ${token}`);
+    request.setRequestHeader("X-File-Name", encodeURIComponent(file.name));
+    request.setRequestHeader("X-File-Type", file.type || "application/octet-stream");
+
+    request.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        onProgress(Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      }
+    });
+
+    request.addEventListener("load", () => {
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve();
+        return;
+      }
+
+      try {
+        const payload = JSON.parse(request.responseText) as { error?: string };
+        reject(new Error(payload.error ?? "中继上传失败"));
+      } catch {
+        reject(new Error("中继上传失败"));
+      }
+    });
+    request.addEventListener("error", () => reject(new Error("中继上传失败")));
+    request.send(file);
+  });
+}
+
+function formatExpiry(expiresAt: number) {
+  const minutes = Math.max(0, Math.round((expiresAt - Date.now()) / 60000));
+  if (minutes >= 60) {
+    return `${Math.round(minutes / 60)} 小时后过期`;
+  }
+  return `${minutes} 分钟后过期`;
 }
 
 function getStatusText(signalStatus: string, connectedCount: number, deviceCount: number) {

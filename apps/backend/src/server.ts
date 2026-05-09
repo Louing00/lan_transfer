@@ -3,11 +3,13 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import mime from "mime";
+import { RelayError, RelayService } from "./services/relayService.js";
 import { RoomService } from "./services/roomService.js";
 import { attachSignalingServer } from "./ws/signalingServer.js";
 
 const port = Number(process.env.PORT ?? 8080);
 const roomService = new RoomService(Number(process.env.ROOM_TTL_MS ?? 1000 * 60 * 60 * 2));
+const relayService = new RelayService();
 const frontendDist = path.resolve(fileURLToPath(new URL("../../frontend/dist", import.meta.url)));
 
 const server = createServer(async (request, response) => {
@@ -32,13 +34,75 @@ async function routeRequest(request: IncomingMessage, response: ServerResponse) 
     sendJson(response, 200, {
       ok: true,
       name: "lindrop",
-      transport: "webrtc-datachannel"
+      transport: "webrtc-datachannel",
+      relayEnabled: relayService.isEnabled()
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/relay/status") {
+    sendJson(response, 200, { enabled: relayService.isEnabled() });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/relay/session") {
+    const body = await readJsonBody<{ password?: string }>(request, 4096);
+    const session = relayService.createSession(body.password ?? "");
+    if (!session) {
+      sendJson(response, relayService.isEnabled() ? 403 : 503, { error: relayService.isEnabled() ? "Invalid password" : "Relay is disabled" });
+      return;
+    }
+    sendJson(response, 200, session);
     return;
   }
 
   if (request.method === "POST" && url.pathname === "/api/rooms") {
     sendJson(response, 201, roomService.createRoom());
+    return;
+  }
+
+  const relayRoomMatch = url.pathname.match(/^\/api\/relay\/rooms\/([A-Z0-9]+)\/files$/);
+  if (request.method === "GET" && relayRoomMatch) {
+    if (!roomService.getRoom(relayRoomMatch[1])) {
+      sendJson(response, 404, { error: "Room not found or expired" });
+      return;
+    }
+    sendJson(response, 200, { files: relayService.listRoomFiles(relayRoomMatch[1]) });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/relay/files") {
+    if (!relayService.isSessionValid(getBearerToken(request))) {
+      sendJson(response, 401, { error: "Relay authorization required" });
+      return;
+    }
+
+    const roomId = (url.searchParams.get("roomId") ?? "").trim().toUpperCase();
+    if (!roomService.getRoom(roomId)) {
+      sendJson(response, 404, { error: "Room not found or expired" });
+      return;
+    }
+
+    const fileName = String(request.headers["x-file-name"] ?? "relay-file");
+    const mimeType = String(request.headers["x-file-type"] ?? "application/octet-stream");
+    try {
+      const file = await relayService.saveFile(request, roomId, fileName, mimeType);
+      sendJson(response, 201, file);
+    } catch (error) {
+      if (error instanceof RelayError) {
+        sendJson(response, error.statusCode, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    return;
+  }
+
+  const relayFileMatch = url.pathname.match(/^\/api\/relay\/files\/([0-9a-f-]+)$/);
+  if (request.method === "GET" && relayFileMatch) {
+    if (!relayService.sendFile(relayFileMatch[1], response)) {
+      sendJson(response, 404, { error: "File not found or expired" });
+    }
     return;
   }
 
@@ -111,4 +175,28 @@ function sendHtml(response: ServerResponse, statusCode: number, html: string) {
   response.statusCode = statusCode;
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.end(html);
+}
+
+function getBearerToken(request: IncomingMessage) {
+  const authorization = request.headers.authorization ?? "";
+  return authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+}
+
+async function readJsonBody<T>(request: IncomingMessage, maxBytes: number): Promise<T> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > maxBytes) {
+      throw new RelayError(413, "Request body is too large");
+    }
+    chunks.push(buffer);
+  }
+
+  if (chunks.length === 0) {
+    return {} as T;
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
 }

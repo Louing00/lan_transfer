@@ -489,6 +489,101 @@ button:disabled {
   background: #c94f38;
 }
 
+.relay-panel {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(23, 33, 36, 0.1);
+}
+
+.relay-header,
+.relay-file,
+.relay-uploader,
+.relay-login {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.relay-header h3 {
+  margin: 4px 0 0;
+  font-size: 20px;
+  letter-spacing: 0;
+}
+
+.relay-note,
+.relay-empty,
+.relay-uploader span,
+.relay-file span {
+  margin: 0;
+  color: #64706d;
+  font-size: 13px;
+}
+
+.relay-login {
+  min-height: 48px;
+  background: #fffaf1;
+  border: 1px solid rgba(23, 33, 36, 0.12);
+  border-radius: 8px;
+  padding: 0 8px 0 12px;
+}
+
+.relay-login input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+}
+
+.relay-login button,
+.relay-upload-button,
+.relay-file a {
+  border: 0;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 8px;
+  padding: 0 12px;
+  color: #fff9ef;
+  background: #266a71;
+  font-weight: 900;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.relay-upload-button:disabled {
+  opacity: 0.58;
+}
+
+.relay-list {
+  display: grid;
+  gap: 8px;
+}
+
+.relay-file {
+  min-height: 58px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: white;
+  border: 1px solid rgba(23, 33, 36, 0.08);
+}
+
+.relay-file div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.relay-file strong {
+  overflow-wrap: anywhere;
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;
@@ -594,6 +689,12 @@ button:disabled {
   .file-drop,
   .progress-grid {
     grid-template-columns: 1fr;
+  }
+
+  .relay-uploader,
+  .relay-file {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .file-drop .primary-button {
