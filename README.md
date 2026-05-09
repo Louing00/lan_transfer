@@ -51,6 +51,35 @@ APP_DIR=/opt/lindrop PORT=8080 BRANCH=main bash scripts/deploy.sh
 
 公网域名建议使用 Nginx 或 Caddy 反向代理到 `127.0.0.1:8080`，并启用 HTTPS。现代浏览器在公网环境下使用 WebRTC、剪贴板等能力时通常要求安全上下文。
 
+## 一键部署 Nginx
+
+先部署应用，再部署 Nginx 反向代理：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Louing00/lan_transfer/main/scripts/deploy.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Louing00/lan_transfer/main/scripts/deploy-nginx.sh | bash
+```
+
+如果你有域名并且已经把 DNS 解析到服务器，可以自动申请 HTTPS：
+
+```bash
+DOMAIN=send.example.com EMAIL=you@example.com \
+  bash scripts/deploy-nginx.sh
+```
+
+远程一键执行：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Louing00/lan_transfer/main/scripts/deploy-nginx.sh | \
+  DOMAIN=send.example.com EMAIL=you@example.com bash
+```
+
+可选参数：
+
+```bash
+DOMAIN=send.example.com UPSTREAM_PORT=8080 SITE_NAME=lindrop ENABLE_SSL=auto bash scripts/deploy-nginx.sh
+```
+
 ## Nginx 反向代理示例
 
 ```nginx
