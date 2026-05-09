@@ -1,4 +1,4 @@
-import { Check, Copy, Download, Edit3, LogOut, QrCode, Send, ShieldCheck, Smartphone, X } from "lucide-react";
+import { Check, Copy, Download, Edit3, LogOut, Pause, Play, QrCode, Send, ShieldCheck, Smartphone, X } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getDeviceId, getDeviceName, setDeviceName } from "../lib/device";
@@ -16,6 +16,8 @@ type ControlMessage =
   | ({ type: "file-meta"; fromPeerId?: string } & FileMeta)
   | { type: "file-accept"; id: string }
   | { type: "file-reject"; id: string }
+  | { type: "file-paused"; id: string }
+  | { type: "file-resumed"; id: string }
   | { type: "file-complete"; id: string };
 
 const chunkSize = 64 * 1024;
@@ -37,6 +39,7 @@ export function RoomPage({ roomId }: Props) {
   const peerManagerRef = useRef<PeerConnectionManager>();
   const channelsRef = useRef(new Map<string, RTCDataChannel>());
   const outgoingFileRef = useRef<File | null>(null);
+  const outgoingPeerIdRef = useRef<string | null>(null);
   const incomingChunksRef = useRef<ArrayBuffer[]>([]);
   const incomingMetaRef = useRef<(FileMeta & { fromPeerId: string }) | null>(null);
 
@@ -57,6 +60,7 @@ export function RoomPage({ roomId }: Props) {
   useEffect(() => {
     reset();
     channelsRef.current.clear();
+    outgoingPeerIdRef.current = null;
     incomingChunksRef.current = [];
 
     const signaling = new SignalingClient(roomId, deviceId, deviceName, {
@@ -122,6 +126,7 @@ export function RoomPage({ roomId }: Props) {
   const connectedPeer = peerManagerRef.current?.getOpenChannel();
   const connectedCount = Object.values(peerStatuses).filter((status) => status === "connected").length;
   const statusText = getStatusText(signalStatus, connectedCount, devices.length);
+  const isTransferBusy = outgoing?.status === "waiting" || outgoing?.status === "transferring" || outgoing?.status === "paused";
 
   async function copyRoomUrl() {
     await navigator.clipboard.writeText(roomUrl);
@@ -144,6 +149,7 @@ export function RoomPage({ roomId }: Props) {
 
     const fileId = createId("file");
     outgoingFileRef.current = selectedFile;
+    outgoingPeerIdRef.current = target.peerId;
     setOutgoing({
       id: fileId,
       name: selectedFile.name,
@@ -209,7 +215,8 @@ export function RoomPage({ roomId }: Props) {
 
     incomingChunksRef.current.push(buffer);
     const done = incomingChunksRef.current.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-    patchIncoming({ done, status: "transferring" });
+    const status = useTransferStore.getState().incoming?.status === "paused" ? "paused" : "transferring";
+    patchIncoming({ done, status });
   }
 
   function handleControlMessage(peerId: string, message: ControlMessage) {
@@ -232,6 +239,22 @@ export function RoomPage({ roomId }: Props) {
       return;
     }
 
+    if (message.type === "file-paused") {
+      const meta = incomingMetaRef.current;
+      if (meta?.id === message.id) {
+        patchIncoming({ status: "paused" });
+      }
+      return;
+    }
+
+    if (message.type === "file-resumed") {
+      const meta = incomingMetaRef.current;
+      if (meta?.id === message.id) {
+        patchIncoming({ status: "transferring" });
+      }
+      return;
+    }
+
     if (message.type === "file-complete") {
       const meta = incomingMetaRef.current;
       if (!meta || meta.id !== message.id) return;
@@ -249,7 +272,9 @@ export function RoomPage({ roomId }: Props) {
 
     try {
       while (offset < file.size) {
+        await waitWhilePaused();
         await waitForBuffer(channel);
+        await waitWhilePaused();
         const nextOffset = Math.min(offset + chunkSize, file.size);
         const buffer = await file.slice(offset, nextOffset).arrayBuffer();
         channel.send(buffer);
@@ -261,6 +286,32 @@ export function RoomPage({ roomId }: Props) {
     } catch (error) {
       console.error(error);
       patchOutgoing({ status: "failed" });
+    }
+  }
+
+  function pauseOutgoing() {
+    if (outgoing?.status !== "transferring") {
+      return;
+    }
+
+    patchOutgoing({ status: "paused" });
+    const peerId = outgoingPeerIdRef.current;
+    const channel = peerId ? channelsRef.current.get(peerId) : undefined;
+    if (channel && outgoing) {
+      sendControl(channel, { type: "file-paused", id: outgoing.id });
+    }
+  }
+
+  function resumeOutgoing() {
+    if (outgoing?.status !== "paused") {
+      return;
+    }
+
+    patchOutgoing({ status: "transferring" });
+    const peerId = outgoingPeerIdRef.current;
+    const channel = peerId ? channelsRef.current.get(peerId) : undefined;
+    if (channel && outgoing) {
+      sendControl(channel, { type: "file-resumed", id: outgoing.id });
     }
   }
 
@@ -352,14 +403,14 @@ export function RoomPage({ roomId }: Props) {
               <span>{selectedFile ? selectedFile.name : "选择要发送的文件"}</span>
               <small>{selectedFile ? formatBytes(selectedFile.size) : "文件不会先上传到服务器"}</small>
             </label>
-            <button className="primary-button" onClick={sendSelectedFile} disabled={!selectedFile || !connectedPeer}>
+            <button className="primary-button" onClick={sendSelectedFile} disabled={!selectedFile || !connectedPeer || isTransferBusy}>
               <Send size={20} aria-hidden />
-              发送
+              {isTransferBusy ? "发送中" : "发送"}
             </button>
           </div>
 
           <div className="progress-grid">
-            <TransferCard title="发送进度" transfer={outgoing} />
+            <TransferCard title="发送进度" transfer={outgoing} onPause={pauseOutgoing} onResume={resumeOutgoing} />
             <TransferCard title="接收进度" transfer={incoming} />
           </div>
         </section>
@@ -396,7 +447,17 @@ export function RoomPage({ roomId }: Props) {
   );
 }
 
-function TransferCard({ title, transfer }: { title: string; transfer?: ReturnType<typeof useTransferStore.getState>["incoming"] }) {
+function TransferCard({
+  title,
+  transfer,
+  onPause,
+  onResume
+}: {
+  title: string;
+  transfer?: ReturnType<typeof useTransferStore.getState>["incoming"];
+  onPause?: () => void;
+  onResume?: () => void;
+}) {
   const done = transfer?.done ?? 0;
   const size = transfer?.size ?? 0;
   const elapsedSeconds = transfer?.startedAt ? Math.max((performance.now() - transfer.startedAt) / 1000, 0.1) : 0;
@@ -415,6 +476,18 @@ function TransferCard({ title, transfer }: { title: string; transfer?: ReturnTyp
         <span>{transfer ? `${formatBytes(done)} / ${formatBytes(size)}` : "等待传输"}</span>
         <span>{transfer?.status === "transferring" ? formatSpeed(speed) : translateTransferStatus(transfer?.status)}</span>
       </div>
+      {transfer?.status === "transferring" && onPause ? (
+        <button className="transfer-action" onClick={onPause}>
+          <Pause size={18} aria-hidden />
+          暂停
+        </button>
+      ) : null}
+      {transfer?.status === "paused" && onResume ? (
+        <button className="transfer-action" onClick={onResume}>
+          <Play size={18} aria-hidden />
+          继续
+        </button>
+      ) : null}
       {transfer?.url ? (
         <a className="download-link" href={transfer.url} download={transfer.name}>
           <Download size={18} aria-hidden />
@@ -447,6 +520,22 @@ function waitForBuffer(channel: RTCDataChannel) {
   });
 }
 
+function waitWhilePaused() {
+  const state = useTransferStore.getState();
+  if (state.outgoing?.status !== "paused") {
+    return Promise.resolve();
+  }
+
+  return new Promise<void>((resolve) => {
+    const unsubscribe = useTransferStore.subscribe((next) => {
+      if (next.outgoing?.status !== "paused") {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+}
+
 function getStatusText(signalStatus: string, connectedCount: number, deviceCount: number) {
   if (signalStatus === "closed") return "信令已断开";
   if (signalStatus === "connecting") return "正在连接信令";
@@ -465,6 +554,7 @@ function translatePeerStatus(status?: PeerStatus) {
 
 function translateTransferStatus(status?: string) {
   if (status === "waiting") return "等待确认";
+  if (status === "paused") return "已暂停";
   if (status === "done") return "完成";
   if (status === "rejected") return "已拒绝";
   if (status === "failed") return "失败";

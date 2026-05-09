@@ -460,17 +460,23 @@ button:disabled {
   font-size: 13px;
 }
 
-.download-link {
+.download-link,
+.transfer-action {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   min-height: 42px;
+  border: 0;
   color: #fff9ef;
   background: #266a71;
   border-radius: 8px;
   text-decoration: none;
   font-weight: 900;
+}
+
+.transfer-action {
+  width: 100%;
 }
 
 .modal-backdrop {
