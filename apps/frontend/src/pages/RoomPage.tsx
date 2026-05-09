@@ -3,6 +3,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getDeviceId, getDeviceName, setDeviceName } from "../lib/device";
 import { formatBytes, formatPercent, formatSpeed } from "../lib/format";
+import { createId } from "../lib/id";
 import { type Device, SignalingClient, type ServerMessage } from "../lib/signaling";
 import { PeerConnectionManager, type PeerStatus } from "../lib/webrtc";
 import { type FileMeta, useTransferStore } from "../stores/transferStore";
@@ -141,7 +142,7 @@ export function RoomPage({ roomId }: Props) {
       return;
     }
 
-    const fileId = crypto.randomUUID();
+    const fileId = createId("file");
     outgoingFileRef.current = selectedFile;
     setOutgoing({
       id: fileId,

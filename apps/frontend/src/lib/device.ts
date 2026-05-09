@@ -1,3 +1,5 @@
+import { createId } from "./id";
+
 const deviceNameKey = "lindrop.deviceName";
 let pageDeviceId: string | undefined;
 
@@ -8,7 +10,7 @@ export function getDeviceId() {
   }
 
   if (!pageDeviceId) {
-    pageDeviceId = crypto.randomUUID();
+    pageDeviceId = createId("device");
   }
   return pageDeviceId;
 }
