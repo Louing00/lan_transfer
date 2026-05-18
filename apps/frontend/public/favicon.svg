@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="邻渡 Lindrop">
+  <rect width="64" height="64" rx="14" fill="#172124"/>
+  <path d="M16 41c7-9 25-9 32 0" fill="none" stroke="#fff9ef" stroke-width="5" stroke-linecap="round"/>
+  <path d="M20 42h24" fill="none" stroke="#c94f38" stroke-width="5" stroke-linecap="round"/>
+  <path d="M22 19h11v7H22z" fill="#fff9ef"/>
+  <path d="M22 30h11v15H22z" fill="#fff9ef"/>
+  <path d="M38 18l9 7-9 7" fill="none" stroke="#88c5bd" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M39 45l8-7" fill="none" stroke="#88c5bd" stroke-width="5" stroke-linecap="round"/>
+</svg>
