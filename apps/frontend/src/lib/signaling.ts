@@ -20,11 +20,16 @@ export type SignalPayload =
 type SignalingHandlers = {
   onOpen?: () => void;
   onClose?: () => void;
+  onReconnecting?: () => void;
   onMessage?: (message: ServerMessage) => void;
 };
 
 export class SignalingClient {
   private socket?: WebSocket;
+  private reconnectTimer?: number;
+  private heartbeatTimer?: number;
+  private reconnectAttempt = 0;
+  private manuallyClosed = false;
 
   constructor(
     private readonly roomId: string,
@@ -34,17 +39,37 @@ export class SignalingClient {
   ) {}
 
   connect() {
+    this.manuallyClosed = false;
+    this.openSocket();
+  }
+
+  private openSocket() {
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const params = new URLSearchParams({
       roomId: this.roomId,
       deviceId: this.deviceId,
       name: this.deviceName
     });
-    this.socket = new WebSocket(`${protocol}//${window.location.host}/ws?${params.toString()}`);
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws?${params.toString()}`);
+    this.socket = socket;
 
-    this.socket.addEventListener("open", () => this.handlers.onOpen?.());
-    this.socket.addEventListener("close", () => this.handlers.onClose?.());
-    this.socket.addEventListener("message", (event) => {
+    socket.addEventListener("open", () => {
+      if (this.socket !== socket) return;
+      this.reconnectAttempt = 0;
+      this.startHeartbeat();
+      this.handlers.onOpen?.();
+    });
+    socket.addEventListener("close", (event) => {
+      if (this.socket !== socket) return;
+      this.socket = undefined;
+      this.stopHeartbeat();
+      if (this.manuallyClosed) return;
+      this.handlers.onClose?.();
+      if (event.code !== 1008) {
+        this.scheduleReconnect();
+      }
+    });
+    socket.addEventListener("message", (event) => {
       try {
         this.handlers.onMessage?.(JSON.parse(event.data) as ServerMessage);
       } catch {
@@ -60,6 +85,40 @@ export class SignalingClient {
   }
 
   close() {
+    this.manuallyClosed = true;
+    if (this.reconnectTimer) {
+      window.clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = undefined;
+    }
+    this.stopHeartbeat();
     this.socket?.close();
+    this.socket = undefined;
+  }
+
+  private scheduleReconnect() {
+    if (this.reconnectTimer || this.manuallyClosed) return;
+    const delay = Math.min(1000 * 2 ** this.reconnectAttempt, 10000);
+    this.reconnectAttempt += 1;
+    this.handlers.onReconnecting?.();
+    this.reconnectTimer = window.setTimeout(() => {
+      this.reconnectTimer = undefined;
+      this.openSocket();
+    }, delay);
+  }
+
+  private startHeartbeat() {
+    this.stopHeartbeat();
+    this.heartbeatTimer = window.setInterval(() => {
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({ type: "heartbeat" }));
+      }
+    }, 20000);
+  }
+
+  private stopHeartbeat() {
+    if (this.heartbeatTimer) {
+      window.clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
   }
 }

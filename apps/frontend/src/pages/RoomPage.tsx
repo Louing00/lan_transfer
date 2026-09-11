@@ -98,7 +98,13 @@ export function RoomPage({ roomId }: Props) {
 
     const signaling = new SignalingClient(roomId, deviceId, deviceName, {
       onOpen: () => setSignalStatus("connected"),
-      onClose: () => setSignalStatus("closed"),
+      onClose: () => {
+        manager.closeAll();
+        channelsRef.current.clear();
+        setPeerStatuses({});
+        setSignalStatus("closed");
+      },
+      onReconnecting: () => setSignalStatus("connecting"),
       onMessage: (message) => handleServerMessage(message)
     });
 
