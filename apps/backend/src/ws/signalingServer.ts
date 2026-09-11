@@ -12,6 +12,8 @@ type ClientContext = {
   roomId: string;
   device: Device;
   socket: WebSocket;
+  connectedAt: number;
+  client: string;
 };
 
 const socketsByRoom = new Map<string, Map<string, ClientContext>>();
@@ -49,6 +51,7 @@ export function attachSignalingServer(server: Server, roomService: RoomService) 
       .filter((device) => device.id !== context.device.id);
 
     roomSockets.set(context.device.id, context);
+    logSignal("connected", context);
 
     send(context.socket, {
       type: "room-state",
@@ -68,9 +71,20 @@ export function attachSignalingServer(server: Server, roomService: RoomService) 
       handleMessage(context, raw.toString());
     });
 
-    socket.on("close", () => {
+    socket.on("close", (code, reason) => {
+      const current = roomSockets.get(context.device.id);
+      if (current?.socket !== socket) {
+        logSignal("stale-close-ignored", context, { code });
+        return;
+      }
+
       roomSockets.delete(context.device.id);
       roomService.leaveRoom(context.roomId, context.device.id);
+      logSignal("closed", context, {
+        code,
+        reason: reason.toString().slice(0, 80),
+        durationMs: Date.now() - context.connectedAt
+      });
       broadcast(context.roomId, context.device.id, {
         type: "peer-left",
         deviceId: context.device.id
@@ -94,7 +108,13 @@ function createContext(request: IncomingMessage, socket: WebSocket, roomService:
     return null;
   }
 
-  return { roomId, device, socket };
+  return {
+    roomId,
+    device,
+    socket,
+    connectedAt: Date.now(),
+    client: getClientName(request.headers["user-agent"])
+  };
 }
 
 function handleMessage(context: ClientContext, raw: string) {
@@ -109,6 +129,8 @@ function handleMessage(context: ClientContext, raw: string) {
   if (message.type !== "signal" || !message.to) {
     return;
   }
+
+  logSignal("forward", context, describeSignal(message.payload));
 
   const target = socketsByRoom.get(context.roomId)?.get(message.to);
   if (!target || target.socket.readyState !== target.socket.OPEN) {
@@ -147,4 +169,42 @@ function broadcast(roomId: string, exceptDeviceId: string, payload: unknown) {
 
 function send(socket: WebSocket, payload: unknown) {
   socket.send(JSON.stringify(payload));
+}
+
+function describeSignal(payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return { kind: "unknown" };
+  }
+
+  const signal = payload as { kind?: unknown; candidate?: { candidate?: unknown } };
+  if (signal.kind !== "ice-candidate") {
+    return { kind: typeof signal.kind === "string" ? signal.kind : "unknown" };
+  }
+
+  const candidate = typeof signal.candidate?.candidate === "string" ? signal.candidate.candidate : "";
+  const parts = candidate.split(/\s+/);
+  const typeIndex = parts.indexOf("typ");
+  return {
+    kind: "ice-candidate",
+    candidateType: typeIndex >= 0 ? parts[typeIndex + 1] ?? "unknown" : "unknown",
+    protocol: parts[2]?.toLowerCase() ?? "unknown"
+  };
+}
+
+function getClientName(userAgent: string | undefined) {
+  if (!userAgent) return "unknown";
+  if (/MicroMessenger/i.test(userAgent)) return "wechat-ios";
+  if (/iPhone|iPad/i.test(userAgent)) return "safari-ios";
+  if (/Chrome/i.test(userAgent)) return "chrome";
+  return "other";
+}
+
+function logSignal(event: string, context: ClientContext, details: Record<string, unknown> = {}) {
+  console.info("[signal]", JSON.stringify({
+    event,
+    roomId: context.roomId,
+    deviceId: context.device.id.slice(0, 8),
+    client: context.client,
+    ...details
+  }));
 }
