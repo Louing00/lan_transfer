@@ -6,6 +6,7 @@ type PeerRecord = {
   id: string;
   pc: RTCPeerConnection;
   channel?: RTCDataChannel;
+  pendingCandidates: RTCIceCandidateInit[];
 };
 
 type PeerHandlers = {
@@ -29,7 +30,7 @@ export class PeerConnectionManager {
       iceServers: getIceServers()
     });
 
-    const record: PeerRecord = { id: peerId, pc };
+    const record: PeerRecord = { id: peerId, pc, pendingCandidates: [] };
     this.peers.set(peerId, record);
 
     pc.addEventListener("icecandidate", (event) => {
@@ -67,6 +68,7 @@ export class PeerConnectionManager {
 
     if (payload.kind === "offer") {
       await record.pc.setRemoteDescription(payload.description);
+      await this.flushPendingCandidates(record);
       const answer = await record.pc.createAnswer();
       await record.pc.setLocalDescription(answer);
       this.handlers.sendSignal(peerId, { kind: "answer", description: answer });
@@ -75,10 +77,15 @@ export class PeerConnectionManager {
 
     if (payload.kind === "answer") {
       await record.pc.setRemoteDescription(payload.description);
+      await this.flushPendingCandidates(record);
       return;
     }
 
     if (payload.kind === "ice-candidate") {
+      if (!record.pc.remoteDescription) {
+        record.pendingCandidates.push(payload.candidate);
+        return;
+      }
       await record.pc.addIceCandidate(payload.candidate);
     }
   }
@@ -114,6 +121,13 @@ export class PeerConnectionManager {
     });
     channel.addEventListener("close", () => this.handlers.onStatus(peerId, "closed"));
     channel.addEventListener("error", () => this.handlers.onStatus(peerId, "failed"));
+  }
+
+  private async flushPendingCandidates(record: PeerRecord) {
+    const candidates = record.pendingCandidates.splice(0);
+    for (const candidate of candidates) {
+      await record.pc.addIceCandidate(candidate);
+    }
   }
 }
 
